@@ -1,0 +1,11 @@
+gain :
+scienceqa:
+T=0:  without hid_arg visual_sr_or 2.38X
+Gt:0.2: 2.21X 3.50
+Gt:0.3: 2.34X 3.74
+Gt:0.4: 2.35X
+Gt:0.5: 2.41X
+Gt:0.6:
+Gt:0.7: 2.56X
+Gt:0.8: 2.52X
+Gt:0.9  2.52X
