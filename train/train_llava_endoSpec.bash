@@ -1,13 +1,11 @@
-# 从头跑stage1和stage2
-CUDA_VISIBLE_DEVICES=1 accelerate launch /media/user/e/xyk/eagle-eye2/eagle-eye2/train/train_llava_endoSpec.py
-
-# 只跑stage1
-CUDA_VISIBLE_DEVICES=2 accelerate launch /media/user/e/xyk/eagle-eye2/eagle-eye2/train/train_llava_endoSpec.py \
-  --only_stage1 \
-  --resume_stage1_state /media/user/d/xyk/model/Eagle_Qwen2.5vl_draft/endoSpec_distill/ScienceQA/stage1/state_25
-
-# 给出state，只跑stage2
-CUDA_VISIBLE_DEVICES=3 accelerate launch /media/user/e/xyk/eagle-eye2/eagle-eye2/train/train_llava_endoSpec.py \
-  --only_stage2 \
-  --init_stage2_from_stage1_state /media/user/d/xyk/model/Eagle_llava_draft/endoSpec_distill/ScienceQA/Stage1/epoch_20
-
+set -euo pipefail
+cd "$(dirname "$0")/.."
+accelerate launch -m train.cats \
+  --basepath "${BASE_MODEL_PATH:?}" \
+  --stage1_datadir "${STAGE1_DATA_DIR:?}" \
+  --stage2_datadir "${STAGE2_DATA_DIR:?}" \
+  --stage1_epochs 20 --stage2_epochs 5 \
+  --stage1_lr 3e-5 --stage2_lr 8e-6 \
+  --stage1_outdir "${STAGE1_OUT_DIR:-checkpoints/cats/stage1}" \
+  --stage2_outdir "${STAGE2_OUT_DIR:-checkpoints/cats/stage2}" \
+  "$@"

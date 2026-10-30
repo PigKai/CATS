@@ -241,6 +241,11 @@ class EaModel(nn.Module):
             self.current_length_data = current_length_data
 
         input_len = input_ids.shape[1]
+        max_new_tokens = min(max_new_tokens, max_length - input_len - self.ea_layer.total_tokens - 10)
+        if max_new_tokens <= 0:
+            if log:
+                return input_ids, 0, -1, []
+            return input_ids
         reset_tree_mode(self.language_model)
 
         draft_tokens, retrieve_indices, tree_mask, tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
@@ -279,6 +284,11 @@ class EaModel(nn.Module):
                 logits_processor=logits_processor,
             )
             # print("accept_length:", accept_length)
+            accept_length = min(int(accept_length), max_new_tokens - int(new_token) - 1)
+            accepted = candidates[best_candidate, :accept_length + 1]
+            eos_positions = (accepted == self.processor.tokenizer.eos_token_id).nonzero(as_tuple=True)[0]
+            if eos_positions.numel():
+                accept_length = min(accept_length, int(eos_positions[0]))
             accept_lens.append(accept_length)
             # Adjusting the input sequence, draft model forward
             input_ids, draft_tokens, retrieve_indices, tree_mask, tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(
@@ -298,7 +308,7 @@ class EaModel(nn.Module):
 
             if self.processor.tokenizer.eos_token_id in input_ids[0, input_len:].tolist():
                 break
-            if new_token > max_new_tokens:
+            if new_token >= max_new_tokens:
                 break
             if input_ids.shape[1] > max_length:
                 break
@@ -351,6 +361,11 @@ class EaModel(nn.Module):
             self.current_length_data = current_length_data
 
         input_len = input_ids.shape[1]
+        max_new_tokens = min(max_new_tokens, max_length - input_len - self.ea_layer.total_tokens - 10)
+        if max_new_tokens <= 0:
+            if log:
+                return input_ids, 0, -1
+            return input_ids
         reset_tree_mode(self.language_model)
 
         outputs = self.base_model(
@@ -361,7 +376,6 @@ class EaModel(nn.Module):
             use_cache=True
         )
         new_token = 0
-        max_length = max_length - self.ea_layer.total_tokens - 10
 
         for idx in range(max_length):
             if logits_processor is not None:
@@ -371,16 +385,16 @@ class EaModel(nn.Module):
                 input_id = torch.multinomial(probabilities, 1)
             else:
                 input_id = outputs.logits[:, -1:].argmax(dim=-1)
-            outputs = self.base_model(input_ids=input_id, use_cache=True, past_key_values=past_key_values)
             input_ids = torch.cat([input_ids, input_id], dim=-1)
             new_token += 1
 
             if self.processor.tokenizer.eos_token_id in input_ids[0, input_len:].tolist():
                 break
-            if new_token > max_new_tokens:
+            if new_token >= max_new_tokens:
                 break
-            if input_ids.shape[1] > max_length:
+            if input_ids.shape[1] >= max_length:
                 break
+            outputs = self.base_model(input_ids=input_id, use_cache=True, past_key_values=past_key_values)
         if not log:
             return input_ids
         else:

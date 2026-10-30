@@ -1,66 +1,48 @@
 import argparse
-import copy
-
-parser = argparse.ArgumentParser(description='sp')
-parser.add_argument('--outdir', type=str, default='/media/user/d/xyk/data1/llava_instruct/qwen2.5vl')
-args = parser.parse_args()
-
 import os
-from concurrent.futures import ThreadPoolExecutor
-
-s = 0
-e = 68000 - 1
-#e = 68 - 1
-#gpus = [[0],[1],[2],[3],[4],[5],[6],[7]]
-
-gpus=[[1]]
-num_p = len(gpus)
-outdir = '{}/qwen2.5vl_7B_{}_{}'.format(args.outdir,s,e)
+import subprocess
+import sys
+from pathlib import Path
 
 
-def split_range(start, end, n, over=False):
-    length = end - start + 1  # Include the end
-    base_interval = length // n
-    additional = length % n  # Get the remainder of the division
-    intervals = []
-    previous = start
-
-    for i in range(n):
-        current_interval = base_interval + (1 if i < additional else 0)
-        if over:
-            intervals.append((previous, previous + current_interval))
-        else:
-            intervals.append((previous, previous + current_interval - 1))  # '-1' because the end is inclusive
-        previous += current_interval
-
-    return intervals
+def split_range(start, end, count):
+    size, extra = divmod(end - start, count)
+    ranges = []
+    for index in range(count):
+        stop = start + size + (index < extra)
+        ranges.append((start, stop))
+        start = stop
+    return ranges
 
 
-def run_command(cmd):
-    os.system(cmd)
+def main():
+    parser = argparse.ArgumentParser('CATS Stage-I feature generation')
+    parser.add_argument('--model_path', required=True)
+    parser.add_argument('--dataset_path', required=True)
+    parser.add_argument('--outdir', required=True)
+    parser.add_argument('--image_root')
+    parser.add_argument('--gpus', nargs='+', default=['0'])
+    parser.add_argument('--start', type=int, default=0)
+    parser.add_argument('--end', type=int, default=68000)
+    parser.add_argument('--seed', type=int, default=0)
+    args = parser.parse_args()
+    script = Path(__file__).resolve().parents[1] / 'distillation/generate.py'
+    processes = []
+    for index, (gpu, (start, end)) in enumerate(zip(args.gpus, split_range(args.start, args.end, len(args.gpus)))):
+        if start == end:
+            continue
+        command = [sys.executable, str(script), '--model_path', args.model_path,
+                   '--dataset_path', args.dataset_path, '--outdir', args.outdir,
+                   '--benchmark', 'llava_instruct', '--start', str(start), '--end', str(end),
+                   '--index', str(index), '--seed', str(args.seed)]
+        if args.image_root:
+            command += ['--image_root', args.image_root]
+        environment = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu)
+        processes.append(subprocess.Popen(command, env=environment))
+    outcomes = [process.wait() for process in processes]
+    if any(outcomes):
+        raise SystemExit(next(code for code in outcomes if code))
 
 
-if not os.path.exists(outdir):
-    os.makedirs(outdir)
-
-
-data_a = split_range(s, e, num_p, over=True)
-commands = []
-for i in range(num_p):
-    index = i
-    start = data_a[i][0]
-    end = data_a[i][1]
-    # gpu_index_str = [str(i) for i in gpu_index]
-    # gpu_index_str=','.join(gpu_index_str)
-    gpu_index = gpus[i]
-    gpu_index_str = ' '.join(map(str, gpu_index))
-    # gpu_index_str='['+gpu_index_str+']'
-    command = "python /media/user/e/xyk/eagle-eye2/eagle-eye2/ge_data/get_data_all_qwen2.5vl.py --start={} --end={} --index={} --gpu_index {} --outdir {}".format(start, end, index,
-                                                                                                    gpu_index_str, outdir)
-    commands.append(command)
-# run_command(commands[0])
-# commands=commands[:1]
-with ThreadPoolExecutor(max_workers=len(commands)) as executor:
-    for command in commands:
-        executor.submit(run_command, command)
-        print(command)
+if __name__ == '__main__':
+    main()

@@ -1,61 +1,27 @@
+import argparse
 import json
-from transformers import AutoTokenizer
-import numpy as np
+from collections import defaultdict
+from pathlib import Path
 
-jsonl_file_base = "/home/dhz/eagle-eye2/outputs/COCO-caption/llava-v1.5-7b-hf-fp16-baseline-temperature-0.0.jsonl"
-jsonl_file = "/home/dhz/eagle-eye2/outputs/COCO-caption/llava-v1.5-7b-hf-fp16-ea2-SFDD-temperature-0.0.jsonl"
-data = []
-with open(jsonl_file, 'r', encoding='utf-8') as file:
-    for line in file:
-        json_obj = json.loads(line)
-        data.append(json_obj)
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from evaluation.benchmark import summarize
 
 
-total_time=0
-total_token=0
-total_idxs=0
-speeds=[]
-for datapoint in data:
-    answer=datapoint['response']
-    idx=datapoint['idx']
-    tokens=datapoint['new_tokens']
-    times = datapoint['wall_time']
-    
-    speeds.append(tokens/times)
-
-    total_time+=times
-    total_token+=tokens
-    total_idxs+=(idx+1)
-
-print(total_token)
-print(total_idxs)
-
-print("accept_ratio",total_token/total_idxs)
-
-data = []
-with open(jsonl_file_base, 'r', encoding='utf-8') as file:
-    for line in file:
-        json_obj = json.loads(line)
-        data.append(json_obj)
-        
-total_time=0
-total_token=0
-speeds0=[]
-total_idxs=0
-for datapoint in data:
-    answer=datapoint['response']
-    tokens=datapoint['new_tokens']
-    times = datapoint['wall_time']
-    idx=datapoint['idx']
-
-    speeds0.append(tokens / times)
-    total_time+=times
-    total_token+=tokens
-    total_idxs+=(idx+1)
-print("accept_ratio0",total_token/total_idxs)
-
-print('speed',np.array(speeds).mean())
-print('speed0',np.array(speeds0).mean())
-print("speedup_ratio",np.array(speeds).mean()/np.array(speeds0).mean())
+def main():
+    parser = argparse.ArgumentParser('CATS wall-clock speedup and acceptance length')
+    parser.add_argument('results')
+    args = parser.parse_args()
+    groups = defaultdict(list)
+    for line in Path(args.results).read_text().splitlines():
+        if line.strip():
+            row = json.loads(line)
+            groups[str(row['temperature'])].append(row)
+    if not groups:
+        raise ValueError('No evaluation records')
+    print(json.dumps({key: summarize(rows) for key, rows in groups.items()}, indent=2))
 
 
+if __name__ == '__main__':
+    main()
