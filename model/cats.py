@@ -108,12 +108,26 @@ def distillation_loss(predicted_hidden, target_hidden, draft_logits, target_logi
     return ((hidden_weight * hidden + probability_weight * probability) * weights).sum() / denominator
 
 
-def enhance_hidden_states(hidden_states, image_embeddings, question_mask, answer_mask,
-                          eta_q=0.02, eta_a=0.1):
+def pool_visual_embeddings(image_embeddings, pool_type='mean'):
     if image_embeddings.ndim != 2 or image_embeddings.shape[0] == 0:
         raise ValueError('Image embeddings must have shape [N, hidden_size] with N > 0')
-    pooled = image_embeddings.float().mean(dim=0).to(hidden_states.device)
-    if pooled.shape[-1] != hidden_states.shape[-1]:
+    values = image_embeddings.float()
+    if pool_type == 'mean':
+        return values.mean(dim=0, keepdim=True)
+    if pool_type == 'max':
+        return values.max(dim=0, keepdim=True).values
+    if pool_type == 'mean_max':
+        return (values.mean(dim=0, keepdim=True) + values.max(dim=0, keepdim=True).values) / 2
+    raise ValueError(f'Unknown visual pooling type: {pool_type}')
+
+
+def enhance_hidden_states(hidden_states, image_embeddings, question_mask, answer_mask,
+                          eta_q=0.02, eta_a=0.1, pool_type='mean'):
+    question_pooled = pool_visual_embeddings(image_embeddings, 'mean').squeeze(0).to(hidden_states.device)
+    answer_pooled = (question_pooled if pool_type == 'mean' else
+                     pool_visual_embeddings(image_embeddings, pool_type).squeeze(0).to(hidden_states.device))
+    if question_pooled.shape[-1] != hidden_states.shape[-1]:
         raise ValueError('Image embeddings must be projected to the language hidden dimension')
-    scale = question_mask.float() * eta_q + answer_mask.float() * eta_a
-    return (hidden_states.float() + scale.unsqueeze(-1) * pooled).to(hidden_states.dtype)
+    question_prior = question_mask.float().unsqueeze(-1) * eta_q * question_pooled
+    answer_prior = answer_mask.float().unsqueeze(-1) * eta_a * answer_pooled
+    return (hidden_states.float() + question_prior + answer_prior).to(hidden_states.dtype)

@@ -75,7 +75,7 @@ def build_lm_head(basepath):
 class CachedTrajectoryDataset(Dataset):
     def __init__(self, directory, max_len=2048, stage=1, gamma=0.1, vhe=False,
                  eta_q=0.02, eta_a=0.1, require_vision=True, require_sampled=False,
-                 benchmark=None):
+                 benchmark=None, pool_type='mean'):
         self.files = sorted(Path(directory).rglob('*.ckpt'))
         if not self.files:
             raise ValueError(f'No cached trajectories in {directory}')
@@ -85,6 +85,7 @@ class CachedTrajectoryDataset(Dataset):
         self.vhe = vhe and stage == 2
         self.eta_q = eta_q
         self.eta_a = eta_a
+        self.pool_type = pool_type
         self.require_vision = require_vision
         self.require_sampled = require_sampled
         self.benchmark = benchmark
@@ -119,10 +120,16 @@ class CachedTrajectoryDataset(Dataset):
                 raise KeyError(f'visual_dep_score missing from {path}')
             visual = vision_critical_mask(data['visual_dep_score'][:len(ids)], answer, self.gamma)
         enhanced = hidden
-        if self.vhe and len(data['image_embeddings']):
-            question = data['question_mask'][:len(ids)].bool()
-            enhanced = enhance_hidden_states(hidden, data['image_embeddings'], question, answer,
-                                             self.eta_q, self.eta_a)
+        if self.vhe:
+            cached = data.get('vision_aug_hidden_state')
+            enhancement = dict(pool_type=self.pool_type, eta_q=self.eta_q, eta_a=self.eta_a)
+            if (data.get('vision_aug_config') == enhancement and torch.is_tensor(cached)
+                    and cached.shape == data['hidden_state'].shape):
+                enhanced = cached[:len(ids)]
+            elif len(data['image_embeddings']):
+                question = data['question_mask'][:len(ids)].bool()
+                enhanced = enhance_hidden_states(hidden, data['image_embeddings'], question, answer,
+                                                 self.eta_q, self.eta_a, self.pool_type)
         item = dict(hidden_states=hidden[:-2], enhanced_hidden_states=enhanced[:-2],
                     input_ids=ids[1:-1], target=hidden[1:-1], labels=ids[2:],
                     loss_mask=answer[2:], visual_static_mask=visual[2:],
@@ -209,7 +216,8 @@ def run_stage(args, stage, model, head, config):
                                       args.vhe and not args.dense, args.eta_q, args.eta_a,
                                       require_vision=not args.dense and args.selection_mode != 'hard',
                                       require_sampled=args.objective == 'nll',
-                                      benchmark=getattr(args, 'benchmark', None) if stage == 2 else None)
+                                      benchmark=getattr(args, 'benchmark', None) if stage == 2 else None,
+                                      pool_type=args.pool_type)
     expected = args.stage1_samples if stage == 1 else args.stage2_samples
     if stage == 2 and expected is None:
         sizes = dict(scienceqa=12726, aokvqa=17056, textvqa=34602)
@@ -308,6 +316,7 @@ def run_stage(args, stage, model, head, config):
                                       v_w=args.v_w, p_w=args.p_w,
                                       vhe=stage == 2 and args.vhe and not args.dense,
                                       eta_q=args.eta_q, eta_a=args.eta_a,
+                                      pool_type=args.pool_type,
                                       ema_momentum=args.ema_momentum,
                                       difficulty_scale=args.difficulty_scale,
                                       gamma=args.gamma, selection_mode=args.selection_mode))
@@ -353,12 +362,13 @@ def main(family='llava', baseline=False, stage1_only=False):
     parser.add_argument('--difficulty_scale', type=float, default=0.8)
     parser.add_argument('--gamma', type=float, default=0.1)
     parser.add_argument('--selection_mode', choices=['union', 'hard', 'visual'], default='union')
-    parser.add_argument('--objective', choices=['nll', 'distillation'], default='distillation')
+    parser.add_argument('--objective', choices=['nll', 'distillation'], default='nll')
     parser.add_argument('--v_w', type=float, default=1.0)
     parser.add_argument('--p_w', type=float, default=0.1)
     parser.add_argument('--vhe', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--eta_q', type=float, default=0.02)
     parser.add_argument('--eta_a', type=float, default=0.1)
+    parser.add_argument('--pool_type', choices=['mean', 'max', 'mean_max'], default='mean')
     parser.add_argument('--only_stage1', action='store_true', default=stage1_only)
     parser.add_argument('--only_stage2', action='store_true', default=baseline)
     parser.add_argument('--resume_stage1_state')
